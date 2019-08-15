@@ -33,49 +33,69 @@ typedef struct {
 	uint32_t last_ticks;
 	uint8_t last_seq;
 	hololens_sensors_packet sensor;
+	bool samsung;
 
 } wmr_priv;
 
-static void vec3f_from_hololens_gyro(int16_t smp[3][32], int i, vec3f* out_vec)
+static void vec3f_from_hololens_gyro(int16_t smp[3][32], int i, bool samsung, vec3f* out_vec)
 {
-	out_vec->x = (float)(smp[1][8*i+0] +
-			     smp[1][8*i+1] +
-			     smp[1][8*i+2] +
-			     smp[1][8*i+3] +
-			     smp[1][8*i+4] +
-			     smp[1][8*i+5] +
-			     smp[1][8*i+6] +
-			     smp[1][8*i+7]) * 0.001f * -0.125f;
-	out_vec->y = (float)(smp[0][8*i+0] +
-			     smp[0][8*i+1] +
-			     smp[0][8*i+2] +
-			     smp[0][8*i+3] +
-			     smp[0][8*i+4] +
-			     smp[0][8*i+5] +
-			     smp[0][8*i+6] +
-			     smp[0][8*i+7]) * 0.001f * -0.125f;
-	out_vec->z = (float)(smp[2][8*i+0] +
-			     smp[2][8*i+1] +
-			     smp[2][8*i+2] +
-			     smp[2][8*i+3] +
-			     smp[2][8*i+4] +
-			     smp[2][8*i+5] +
-			     smp[2][8*i+6] +
-			     smp[2][8*i+7]) * 0.001f * -0.125f;
+	int x = 1;
+	int y = 0;
+	int z = 2;
+	//Samsung has IMU oriented differently so flipping them back is needed
+	if(samsung) {
+		x = 0;
+		y = 1;
+	}
+	
+	out_vec->x = (float)(smp[x][8*i+0] +
+			     smp[x][8*i+1] +
+			     smp[x][8*i+2] +
+			     smp[x][8*i+3] +
+			     smp[x][8*i+4] +
+			     smp[x][8*i+5] +
+			     smp[x][8*i+6] +
+			     smp[x][8*i+7]) * 0.001f * -0.125f;
+	out_vec->y = (float)(smp[y][8*i+0] +
+			     smp[y][8*i+1] +
+			     smp[y][8*i+2] +
+			     smp[y][8*i+3] +
+			     smp[y][8*i+4] +
+			     smp[y][8*i+5] +
+			     smp[y][8*i+6] +
+			     smp[y][8*i+7]) * 0.001f * -0.125f;
+	out_vec->z = (float)(smp[z][8*i+0] +
+			     smp[z][8*i+1] +
+			     smp[z][8*i+2] +
+			     smp[z][8*i+3] +
+			     smp[z][8*i+4] +
+			     smp[z][8*i+5] +
+			     smp[z][8*i+6] +
+			     smp[z][8*i+7]) * 0.001f * -0.125f;
+	//Samsung has IMU oriented differently so inverting X is needed
+	if(samsung) {
+		out_vec->x = -out_vec->x;
+	}
 }
 
-static void vec3f_from_hololens_accel(int32_t smp[3][4], int i, vec3f* out_vec)
+static void vec3f_from_hololens_accel(int32_t smp[3][4], int i, bool samsung, vec3f* out_vec)
 {
-	out_vec->x = (float)smp[1][i] * 0.001f * -1.0f;
-	out_vec->y = (float)smp[0][i] * 0.001f * -1.0f;
-	out_vec->z = (float)smp[2][i] * 0.001f * -1.0f;
+	if(!samsung) {
+		out_vec->x = (float)smp[1][i] * 0.001f * -1.0f;
+		out_vec->y = (float)smp[0][i] * 0.001f * -1.0f;
+		out_vec->z = (float)smp[2][i] * 0.001f * -1.0f;
+	} else {
+		out_vec->x = (float)smp[0][i] * 0.001f * -1.0f;
+		out_vec->y = (float)smp[1][i] * 0.001f * -1.0f;
+		out_vec->z = (float)smp[2][i] * 0.001f * -1.0f;
+	}
 }
 
 static void handle_tracker_sensor_msg(wmr_priv* priv, unsigned char* buffer, int size)
 {
 	uint64_t last_sample_tick = priv->sensor.gyro_timestamp[3];
 
-	if (!hololens_sensors_decode_packet(&priv->sensor, buffer, size)) {
+	if(!hololens_sensors_decode_packet(&priv->sensor, buffer, size)){
 		LOGE("couldn't decode tracker sensor message");
 	}
 
@@ -93,8 +113,8 @@ static void handle_tracker_sensor_msg(wmr_priv* priv, unsigned char* buffer, int
 
 		float dt = tick_delta * TICK_LEN;
 
-		vec3f_from_hololens_gyro(s->gyro, i, &priv->raw_gyro);
-		vec3f_from_hololens_accel(s->accel, i, &priv->raw_accel);
+		vec3f_from_hololens_gyro(s->gyro, i, priv->samsung, &priv->raw_gyro);
+		vec3f_from_hololens_accel(s->accel, i, priv->samsung, &priv->raw_accel);
 
 		ofusion_update(&priv->sensor_fusion, dt, &priv->raw_gyro, &priv->raw_accel, &mag);
 
@@ -332,7 +352,7 @@ static ohmd_device* open_hmd_device(ohmd_driver* driver, ohmd_device_desc* desc)
 {
 	wmr_priv* priv = ohmd_alloc(driver->ctx, sizeof(wmr_priv));
 	unsigned char *config;
-	bool samsung = false;
+	priv->samsung = false;
 
 	if(!priv) {
 		return NULL;
@@ -358,7 +378,7 @@ static ohmd_device* open_hmd_device(ohmd_driver* driver, ohmd_device_desc* desc)
 		LOGI("Model name: %.64s", hdr->name);
 		if (strncmp(hdr->name,
 			    "Samsung Windows Mixed Reality 800ZAA", 64) == 0) {
-			samsung = true;
+			priv->samsung = true;
 		}
 
 		char *json_data = (char*)config + hdr->json_start + sizeof(uint16_t);
@@ -417,7 +437,7 @@ static ohmd_device* open_hmd_device(ohmd_driver* driver, ohmd_device_desc* desc)
 	ohmd_set_default_device_properties(&priv->base.properties);
 
 	// Set device properties
-	if (samsung) {
+	if (priv->samsung) {
 		// Samsung Odyssey has two 3.5" 1440x1600 OLED displays.
 		priv->base.properties.hsize = 0.118942f;
 		priv->base.properties.vsize = 0.066079f;
